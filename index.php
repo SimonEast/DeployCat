@@ -19,7 +19,11 @@ if (!empty($_GET['action'])) {
  */
 function actionGetStatus() {
 	echo json_encode([
-		'test' => 1
+		'Current branch' => gitCurrentBranch(),
+		'Current commit' => gitCurrentCommit(),
+		'Remote origin' => gitRemoteOriginUrl(),
+		'PHP version' => phpversion(),
+		'Git version' => runGit('--version', true)[0],
 	]);
 }
 
@@ -28,8 +32,8 @@ function actionGetStatus() {
  * @return JSON array of modified and untracked files
  */
 function actionGitStatus() {
-	system('git status');
-	system('git status --porcelain');
+	runGitAndStreamOutput('status', true);
+	runGitAndStreamOutput('status');
 }
 
 /**
@@ -60,6 +64,14 @@ function runGit($command, $humanFriendly = false) {
 	return run(prepareGitCommand($command, $humanFriendly));
 }
 
+/**
+ * Runs git and streams the output line by line to browser
+ * (Useful for long-running commands)
+ * 
+ * @param $command (minus the "git")
+ * @param boolean $humanFriendly
+ * @return null
+ */
 function runGitAndStreamOutput($command, $humanFriendly = false) {
 	runAndStreamOutput(prepareGitCommand($command, $humanFriendly));
 }
@@ -76,6 +88,37 @@ function prepareGitCommand($command, $humanFriendly) {
 	if (!$humanFriendly)
 		$command[] = '--porcelain';	// this produces a more machine-parseable output	
 	return implode(' ', $command);
+}
+
+/**
+ * Returns the branch that the repository is currently tracking
+ * @return string
+ */
+function gitCurrentBranch() {
+	$branches = runGit('branch', true);
+	$branch = array_filter($branches, function($item){
+		return substr($item, 0, 1) == '*';
+	});
+	return trim($branch[0], " \t*");
+}
+
+/**
+ * Return the hash ID of the commit currently deployed in repository
+ * @return string
+ */
+function gitCurrentCommit() {
+	return runGit('rev-parse HEAD', true)[0];
+}
+
+/**
+ * Returns the URL of the remote origin repository
+ * @return string
+ */
+function gitRemoteOriginUrl() {
+	// Or 'git remote show origin' may also work
+	$remote = runGit('config --get remote.origin.url', true);
+	if (count($remote))
+		return $remote[0];
 }
 
 /********************************************
@@ -110,15 +153,15 @@ function prepareGitCommand($command, $humanFriendly) {
 		<!-- Nav -->
 	    <div class="collapse navbar-collapse" id="navbarsExampleDefault">
 	      <ul class="navbar-nav mr-auto">
-	        <li class="nav-item active">
-	          <a class="nav-link" href="#" @click="screen = 'home'">Home <span class="sr-only">(current)</span></a>
+	        <li class="nav-item" :class="{active: screen == ''}">
+	          <a class="nav-link" href="#">Home <span class="sr-only">(current)</span></a>
 	        </li>
-	        <li class="nav-item">
-	          <a class="nav-link" href="#" @click="screen = 'status'">Status</a>
+	        <li class="nav-item" :class="{active: screen == 'status'}">
+	          <a class="nav-link" href="#status">Status</a>
 	        </li>
-	        <li class="nav-item">
+	        <!-- <li class="nav-item">
 	          <a class="nav-link disabled" href="#">Disabled</a>
-	        </li>
+	        </li> -->
 	        <!-- <li class="nav-item dropdown">
 	          <a class="nav-link dropdown-toggle" href="https://example.com" id="dropdown01" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Dropdown</a>
 	          <div class="dropdown-menu" aria-labelledby="dropdown01">
@@ -133,8 +176,8 @@ function prepareGitCommand($command, $humanFriendly) {
 
 	  <main role="main" class="container">
 
-		<!-- Home Screen -->
-	    <div class="starter-template" v-if="screen == 'home'">
+		<!-- Default Home Screen -->
+	    <div class="starter-template" v-if="screen == ''">
 	      <h1>Bootstrap starter template</h1>
 	      <p class="lead">Use this document as a way to quickly start any new project.<br> All you get is this text and a mostly barebones HTML document.</p>
 	    </div>
@@ -142,14 +185,14 @@ function prepareGitCommand($command, $humanFriendly) {
 	    <!-- Status Screen -->
 		<div v-if="screen=='status'">
 			<table class="table table-striped">
-				<tr>
-					<td></td>
-					<td></td>
+				<tr v-for="(item, key) in status">
+					<th>{{key}}</th>
+					<td>{{item}}</td>
 				</tr>
 			</table>
 		</div>
 
-	  </main><!-- /.container -->
+	  </main>
 	
 	</div>
 	
@@ -158,11 +201,15 @@ function prepareGitCommand($command, $humanFriendly) {
 		vueApp = new Vue({
 			el: '#app',
 			data: {
-				screen: 'home',
-				status: {},
+				screen: location.hash.substr(1), // Check the URL for which screen to begin on, ensuring we strip the initial hash
+				status: {}, // populated via AJAX
 			},
 			methods: {},
-		});		
+		});
+		
+		window.addEventListener("hashchange", function() {
+			vueApp.screen = location.hash.substr(1);
+		});
 	</script>
 	
 	<!-- Using Axios for AJAX functionality -->
