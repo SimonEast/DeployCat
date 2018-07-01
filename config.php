@@ -1,6 +1,8 @@
 <?php
 return [
+	'environmentLabel' => 'Production',
 	'git' => [
-		'branch' => 'master',
+		'deployFromBranch' => 'master',
+		'remote' => 'origin',
 	],
 ];
