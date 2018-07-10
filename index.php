@@ -1,6 +1,41 @@
 <?php
 $config = require('config.php');
 
+//-----------------------------------------------------------
+// You shouldn't need to modify anything below here
+// Most things can be configured inside config.php
+//-----------------------------------------------------------
+
+// Set some defaults, in case items are missing from config.php
+$config = $config + [
+	'environmentLabel' => 'Production',
+	'git' => [
+		'deployFromBranch' => 'master',
+		'remote' => 'origin',
+	],
+	'allowedIPs' => [],
+];
+
+// Block robots from indexing this tool
+header('X-Robots-Tag: noindex,nofollow');
+
+// Authentication
+// For now we only have IP-based auth (IPv4 only). 
+// Later we can implement password/session-based auth
+$accessGranted = false;
+$userIP = $_SERVER['REMOTE_ADDR'];
+foreach ($config['allowedIPs'] as $ip) {
+	if ($ip === $userIP) {
+		$accessGranted = true;
+		break;
+	}
+}
+if (!$accessGranted) {
+	http_response_code(401);
+	die('<h1>401 Unauthorized</h1> No access permitted from IP ' . $userIP);
+}
+
+
 // Route AJAX actions to the appropriate actionXXX() function
 if (!empty($_GET['action'])) {
 	
@@ -24,11 +59,13 @@ if (!empty($_GET['action'])) {
  */
 function actionGetStatus() {
 	echo json_encode([
+		'Deployment folder' => runGit('rev-parse --show-toplevel')[0],
 		'Current branch' => gitCurrentBranch(),
 		'Current commit' => gitCurrentCommit(),
 		'Remote origin' => gitRemoteOriginUrl(),
 		'PHP version' => phpversion(),
 		'Git version' => runGit('--version')[0],
+		'Operating System' => php_uname(),
 	]);
 }
 
@@ -193,12 +230,18 @@ function gitRemoteOriginUrl() {
 	<meta http-equiv="X-UA-Compatible" content="IE=edge">
 	<title>DeployCat</title>
 	<link rel="stylesheet" href="css/bootstrap.min.css">
+	<style>
+		/* Hide Vue elements until it's initialised */
+		[v-cloak] {
+		  display: none;
+		}
+	</style>
 	<script src="js/vue.js"></script>
 </head>
 <body>
 	
   <!-- VueJS is mounted onto this root DIV -->
-  <div id="app">
+  <div id="app" v-cloak>
 	
 	<!-- Top Navigation Bar -->
 	<nav class="navbar navbar-expand-md navbar-dark bg-dark" style="margin-bottom: 24px">
@@ -243,8 +286,8 @@ function gitRemoteOriginUrl() {
 		<!-- Default Home Screen -->
 	    <div class="starter-template" v-if="screen == ''">
 	    	
-	      <h4>You are on <?= $_SERVER['SERVER_NAME'] ?> 
-	      	<div class="badge badge-secondary" style="font-size: 75%; float: right">
+	      <h4 style="font-weight: 300">You are on <?= $_SERVER['SERVER_NAME'] ?> 
+	      	<div class="badge badge-secondary" style="font-size: 75%; font-weight: inherit; margin-left: 10px">
 	      		<?= $config['environmentLabel'] ?>
 	      	</div>
 	      </h4>
@@ -252,7 +295,10 @@ function gitRemoteOriginUrl() {
 	      <div class="jumbotron" style="padding: 1.5rem">
 	      	
 	      	<div class="form-group">
-	      		<select v-model="selectedCommit" class="form-control">
+	      		<select v-show="commitLog.length == 0" class="form-control" style="color: #aaa; font-style: italic;" disabled>
+	      			<option selected="selected">Fetching latest commits...</option>
+	      		</select>
+	      		<select v-show="commitLog.length" v-model="selectedCommit" class="form-control">
 	      			<option v-for="commit in commitLog" :value="commit.hash">
 	      				{{ commit.message }} - {{ commit.hash }}
 	      			</option>
@@ -263,7 +309,7 @@ function gitRemoteOriginUrl() {
 	      		<div class="col-sm" style="line-height: 24px">
 	      			You will be deploying:
 	      			<div>
-	      				<strong style="font-size: 140%">3</strong> 
+	      				<strong style="font-size: 140%">X</strong> 
 	      				commits to <?= $config['git']['deployFromBranch'] ?> branch
 	      			</div>
 	      			<div>
@@ -273,7 +319,8 @@ function gitRemoteOriginUrl() {
 	      			<a href="#" @click="refresh">Refresh</a>
 	      		</div>
 	      		<div class="col-sm">
-	      			<button class="btn btn-lg btn-danger">Deploy</button>
+	      			<button v-if="commitLog.length && currentCommit == selectedCommit" class="btn btn-lg btn-light" disabled>Nothing to deploy</button>
+	      			<button v-else-if="commitLog.length" class="btn btn-lg btn-danger">Deploy</button>
 	      		</div>
 	      	</div>
 	      	
@@ -374,12 +421,18 @@ function gitRemoteOriginUrl() {
 					axios.get('?action=GetStatus')
 					.then(function(response){
 						vueApp.status = response.data;
-						vueApp.currentCommit = response.data['Current commit'];
+						vueApp.status.HTTPS = location.protocol == 'https:' ? 'Yes' : 'NO';
+						vueApp.currentCommit = response.data['Current commit'].substr(0, 7);
 					});
 					
 					axios.get('?action=FetchAndGetLog')
 					.then(function(response){
 						vueApp.commitLog = response.data;
+						// Automatically select latest commit
+						// (Do we *always* want to do this? What if user has previously chosen another?)
+						if (vueApp.commitLog.length) {
+							vueApp.selectedCommit = vueApp.commitLog[0].hash;
+						}
 					});
 					
 					this.getFilesChanged();

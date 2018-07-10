@@ -5,4 +5,5 @@ return [
 		'deployFromBranch' => 'master',
 		'remote' => 'origin',
 	],
+	'allowedIPs' => ['127.0.0.1'],
 ];
