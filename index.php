@@ -137,6 +137,24 @@ function sanitizeCommitHash($hash) {
 }
 
 /**
+ * Deploy a specific commit (using git reset)
+ * @return string
+ */
+function actionDeploy() {
+	if (empty($_POST['commit'])) {
+		die(json_encode(['error' => 'No commit hash detected']));
+	}
+	
+	$commit = sanitizeCommitHash($_POST['commit']);
+	
+	// Or 'git remote show origin' may also work
+	$stash = runGit('stash');
+	$deploy = runGit("reset $commit --hard");
+	if (count($remote))
+		return $remote[0];
+}
+
+/**
  * Run a console command and return the output as an array
  */
 function run($command) {
@@ -218,6 +236,7 @@ function gitRemoteOriginUrl() {
 	if (count($remote))
 		return $remote[0];
 }
+
 
 /********************************************
  * Everything below here is the front end UI
@@ -319,8 +338,18 @@ function gitRemoteOriginUrl() {
 	      			<a href="#" @click="refresh">Refresh</a>
 	      		</div>
 	      		<div class="col-sm">
-	      			<button v-if="commitLog.length && currentCommit == selectedCommit" class="btn btn-lg btn-light" disabled>Nothing to deploy</button>
-	      			<button v-else-if="commitLog.length" class="btn btn-lg btn-danger">Deploy</button>
+	      			<button 
+	      				v-if="commitLog.length && currentCommit == selectedCommit" 
+	      				class="btn btn-lg btn-light" 
+	      				disabled>Nothing to deploy</button>
+	      			<button 
+	      				v-else-if="deployInProgress" 
+	      				class="btn btn-lg btn-light" 
+	      				disabled>Deployment in progress...</button>
+	      			<button 
+	      				v-else-if="commitLog.length" 
+	      				class="btn btn-lg btn-danger" 
+	      				@click="deploy()">Deploy</button>
 	      		</div>
 	      	</div>
 	      	
@@ -375,6 +404,7 @@ function gitRemoteOriginUrl() {
 				// Which screen of the UI is the user currently on
 				// We check the URL for which screen to begin on, ensuring we strip the leading '#'
 				screen: location.hash.substr(1), 
+				deployInProgress: false,
 				
 				// The following items are all populated via AJAX...
 				
@@ -482,6 +512,15 @@ function gitRemoteOriginUrl() {
 					if (statusCode == '??')
 						return 'Untracked';
 					return statusCode;
+				},
+				
+				deploy: function() {
+					this.deployInProgress = true;
+					axios.post('?action=Deploy', {commit: this.selectedCommit})
+					.then(function(response){
+						console.log('Deployment complete, response: ', response);
+						this.deployInProgress = false;
+					});
 				}
 			},
 		});
