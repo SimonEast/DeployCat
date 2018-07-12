@@ -16,6 +16,8 @@ $config = $config + [
 	'allowedIPs' => [],
 ];
 
+define('DEPLOYCAT_VERSION', '0.1.3');
+
 // Block robots from indexing this tool
 header('X-Robots-Tag: noindex,nofollow');
 
@@ -39,16 +41,33 @@ if (!$accessGranted) {
 // Route AJAX actions to the appropriate actionXXX() function
 if (!empty($_GET['action'])) {
 	
-	// TODO: Check user is authenticated
+	// Axios AJAX library sends POST data as JSON, so we decode it before
+	// running any action below
+	$_POST = json_decode(file_get_contents('php://input'), true);
+	
 	// Some of these actions could open severe security vulnerabilities
 	// if someone can run their own (unfiltered) console commands
 	// so we strip out all non-word characters
 	$function = 'action' . preg_replace('/\\W/', '', $_GET['action']);
 	if (function_exists($function)) {
-		$function();
+		try {
+			$function();			
+		} catch (\Exception $e) {
+			http_response_code(500);
+			if (empty($e->commandOutput))
+				$e->commandOutput = null;
+			elseif (is_array($e->commandOutput))
+				$e->commandOutput = implode("\n", $e->commandOutput);
+			echo json_encode([
+				'errorMessage' => $e->getMessage(),
+				'commandInput' => !empty($e->commandInput) ? $e->commandInput : null,
+				'commandOutput' => $e->commandOutput,
+			]);
+			die();
+		}
 	} else {
 		http_response_code(404);
-		echo '{"error": "Action \'' . $function . '\' doesn\'t exist."}';
+		echo json_encode(['errorMessage' => "Action '$function' doesn't exist."]);
 	}
 	die();
 } 
@@ -63,6 +82,7 @@ function actionGetStatus() {
 		'Current branch' => gitCurrentBranch(),
 		'Current commit' => gitCurrentCommit(),
 		'Remote origin' => gitRemoteOriginUrl(),
+		'DeployCat version' => DEPLOYCAT_VERSION,
 		'PHP version' => phpversion(),
 		'Git version' => runGit('--version')[0],
 		'Operating System' => php_uname(),
@@ -150,16 +170,26 @@ function actionDeploy() {
 	// Or 'git remote show origin' may also work
 	$stash = runGit('stash');
 	$deploy = runGit("reset $commit --hard");
-	if (count($remote))
-		return $remote[0];
+	if (count($deploy))
+		return $deploy[0];
 }
 
 /**
  * Run a console command and return the output as an array
+ * (we redirect stderr to stdout so that any error messages are also included in output)
  */
 function run($command) {
 	$output = [];
-	exec($command, $output);
+	exec($command . ' 2>&1', $output, $exitCode);
+	
+	// Throw an exception if command returns an error code
+	if ($exitCode != 0) {
+		$e = new \Exception('Console command failed');
+		$e->commandInput = $command;
+		$e->commandOutput = $output;
+		throw $e;
+	}
+	
 	return $output;
 }
 
@@ -179,7 +209,14 @@ function runAndStreamOutput($command) {
  * @return array of lines from output 
  */
 function runGit($command) {
-	return run(prepareGitCommand($command));
+	try {
+		return run(prepareGitCommand($command));		
+	} catch (\Exception $e) {
+		$new = new \Exception('The following git command did not complete successfully:');
+		$new->commandInput = $e->commandInput;
+		$new->commandOutput = $e->commandOutput;
+		throw $new;
+	}
 }
 
 /**
@@ -254,6 +291,16 @@ function gitRemoteOriginUrl() {
 		[v-cloak] {
 		  display: none;
 		}
+		#changes-tab .untracked {
+			opacity: 0.3;
+		}
+		h1, h2, h3, h4 {
+			font-weight: 300;
+		}
+		/* Neater alignment for left column of tables - doesn't work with 'table-striped' though */
+		table td:first-child {
+		    padding-left: 0;
+		}
 	</style>
 	<script src="js/vue.js"></script>
 </head>
@@ -318,9 +365,11 @@ function gitRemoteOriginUrl() {
 	      			<option selected="selected">Fetching latest commits...</option>
 	      		</select>
 	      		<select v-show="commitLog.length" v-model="selectedCommit" class="form-control">
-	      			<option v-for="commit in commitLog" :value="commit.hash">
-	      				{{ commit.message }} - {{ commit.hash }}
-	      			</option>
+	      			<optgroup v-for="group in commitLogGrouped" v-if="group.commits.length" :label="group.label">
+		      			<option v-for="commit in group.commits" :value="commit.hash">
+		      				{{ commit.message }} - {{ commit.hash }}
+		      			</option>
+	      			</optgroup>
 	      		</select>
 	      	</div>
 	      	
@@ -328,8 +377,8 @@ function gitRemoteOriginUrl() {
 	      		<div class="col-sm" style="line-height: 24px">
 	      			You will be deploying:
 	      			<div>
-	      				<strong style="font-size: 140%">X</strong> 
-	      				commits to <?= $config['git']['deployFromBranch'] ?> branch
+	      				<strong style="font-size: 140%">{{ commitsToDeploy }}</strong> 
+	      				commits from <?= $config['git']['deployFromBranch'] ?> branch
 	      			</div>
 	      			<div>
 	      				<strong style="font-size: 140%">{{ filesToDeploy.length }}</strong> 
@@ -368,12 +417,20 @@ function gitRemoteOriginUrl() {
 	      
 	    </div>
 	    
+	    <!-- Deployment Success Screen -->
+		<div id="deployment-success-tab" v-if="screen=='deploymentSuccess'">
+	    	<div class="jumbotron" style="padding: 1.5rem">
+	    		<h2 class="display-4" style="margin-bottom: 0.5em;">Deployment complete.</h2>
+	    		<h2>Total time: {{ deployment.time }} seconds</h2>
+	    	</div>
+	    </div>
+	    
 	    <!-- Changes Screen -->
-		<div v-if="screen=='changes'">
+		<div id="changes-tab" v-if="screen=='changes'">
 			<p>The following files have been modified since last deployment. They will be 'stashed' when the next deploy or revert occurs and the changes will only be recoverable via the command line (not explained here).</p>
 			<p>Untracked files will be left as is.</p>
-			<table class="table table-striped">
-				<tr v-for="file in filesChanged">
+			<table class="table">
+				<tr v-for="file in filesChanged" :class="{untracked: file.status == '??'}">
 					<td>{{ fileStatusLong(file.status) }}</td>
 		      		<td>{{ file.filename }}</td>
 				</tr>
@@ -388,6 +445,14 @@ function gitRemoteOriginUrl() {
 					<td>{{item}}</td>
 				</tr>
 			</table>
+		</div>
+		
+		<!-- Error Screen -->
+		<div v-if="screen=='error'">
+			<h1>An error occurred</h1>
+			<h2>{{ error.errorMessage }}</h2>
+			<code>{{ error.commandInput }}</code>
+			<pre><code>{{ error.commandOutput }}</code></pre>
 		</div>
 
 	  </main>
@@ -405,6 +470,9 @@ function gitRemoteOriginUrl() {
 				// We check the URL for which screen to begin on, ensuring we strip the leading '#'
 				screen: location.hash.substr(1), 
 				deployInProgress: false,
+				deployment: {
+					time: null,
+				},
 				
 				// The following items are all populated via AJAX...
 				
@@ -425,6 +493,52 @@ function gitRemoteOriginUrl() {
 				
 				// Array of files changed between currentCOmmit and working copy
 				filesChanged: [],
+				
+				// The details of any AJAX error messages
+				error: {
+					errorMessage: null,
+					commandOutput: null,
+				},
+			},
+			computed: {
+				/**
+				 * Group the this.commitLog into past/current/future commits
+				 */
+				commitLogGrouped: function() {
+					var groups = [
+						{label: 'Awaiting deployment', commits: []},
+						{label: 'Current commit', commits: []},
+						{label: 'Previous commits', commits: []},
+					];
+					var currentCommitSeen = false;
+					this.commitLog.forEach(function(item){
+						if (item.hash == vueApp.currentCommit) {
+							currentCommitSeen = true;
+							groups[1].commits.push(item);
+						} else if (!currentCommitSeen) {
+							groups[0].commits.push(item);
+						} else {
+							groups[2].commits.push(item);
+						}
+					});
+					return groups;
+				},
+				
+				/**
+				 * How many commits are there between currentCommit and selectedCommit?
+				 */
+				commitsToDeploy: function() {
+					var currentCommitIndex = -1, selectedCommitIndex = -1;
+					for (var i = 0; i < this.commitLog.length; i++) {
+						if (this.commitLog[i].hash == this.currentCommit)
+							currentCommitIndex = i;
+						if (this.commitLog[i].hash == this.selectedCommit)
+							selectedCommitIndex = i;
+						if (currentCommitIndex > -1 && selectedCommitIndex > -1)
+							return currentCommitIndex - selectedCommitIndex;
+					}
+					return '-';
+				},
 			},
 			watch: {
 				/**
@@ -437,6 +551,18 @@ function gitRemoteOriginUrl() {
 				}
 			},
 			methods: {
+				
+				/**
+				 * Change between views/tabs within the UI
+				 */
+				changeScreen: function(screen) {
+					// If we 'seem' to already be on that screen, enforce it
+					if (window.location.hash == screen)
+						this.screen = screen;
+					// Otherwise, update the URL hash and our handler will update this.screen
+					window.location.hash = screen;					
+				},
+				
 				/**
 				 * Perform a 'git fetch' and populate 'commitLog' with latest 
 				 * list of commits
@@ -447,23 +573,27 @@ function gitRemoteOriginUrl() {
 						return;
 					}
 					
-					// TODO: Handle errors if they occur
+					// Populate data in 'Status' tab
 					axios.get('?action=GetStatus')
 					.then(function(response){
 						vueApp.status = response.data;
 						vueApp.status.HTTPS = location.protocol == 'https:' ? 'Yes' : 'NO';
 						vueApp.currentCommit = response.data['Current commit'].substr(0, 7);
-					});
+					})
+					.catch(this.handleAjaxError);
 					
+					// Perform a 'git fetch' and then get a list of last 200 commits
 					axios.get('?action=FetchAndGetLog')
 					.then(function(response){
 						vueApp.commitLog = response.data;
+						
 						// Automatically select latest commit
 						// (Do we *always* want to do this? What if user has previously chosen another?)
 						if (vueApp.commitLog.length) {
 							vueApp.selectedCommit = vueApp.commitLog[0].hash;
 						}
-					});
+					})
+					.catch(this.handleAjaxError);
 					
 					this.getFilesChanged();
 				},
@@ -480,7 +610,8 @@ function gitRemoteOriginUrl() {
 					axios.get('?action=Diff&a=' + commitHashA + '&b=' + commitHashB)
 					.then(function(response){
 						vueApp.filesToDeploy = response.data;
-					});
+					})
+					.catch(this.handleAjaxError);
 				},
 				
 				/**
@@ -494,8 +625,9 @@ function gitRemoteOriginUrl() {
 					axios.get('?action=FilesChanged')
 					.then(function(response){
 						vueApp.filesChanged = response.data;
-					});
-				},				
+					})
+					.catch(this.handleAjaxError);
+				},
 				
 				/**
 				 * Convert git's short status codes into a longer textual description
@@ -514,14 +646,39 @@ function gitRemoteOriginUrl() {
 					return statusCode;
 				},
 				
+				/**
+				 * Run a deployment, sends a POST request to server
+				 */
 				deploy: function() {
 					this.deployInProgress = true;
+					var startTime = new Date();
 					axios.post('?action=Deploy', {commit: this.selectedCommit})
 					.then(function(response){
+						// Yay, it appears to be a success!
 						console.log('Deployment complete, response: ', response);
-						this.deployInProgress = false;
-					});
-				}
+						vueApp.deployInProgress = false;
+						vueApp.changeScreen('deploymentSuccess');
+						vueApp.currentCommit = vueApp.selectedCommit;
+						vueApp.filesToDeploy = [];
+						vueApp.getFilesChanged();
+						vueApp.deployment.time = Math.round(((new Date()) - startTime) / 10, 2) / 100;
+					})
+					.catch(this.handleAjaxError);
+				},
+				
+				/** 
+				 * Generic error handler for all AJAX requests
+				 * See https://github.com/axios/axios#handling-errors
+				 */
+				handleAjaxError: function(error) {
+					this.changeScreen('error');
+					if (error.response) {
+						console.error('DeployCat detected the following AJAX error: ', error.response.data);
+						this.error = error.response.data;
+					} else {
+						this.error = {errorMessage: 'An unknown error occurred when making an AJAX request to the server. No response was received.'};
+					}
+				},
 			},
 		});
 		
