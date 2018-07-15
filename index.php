@@ -34,7 +34,8 @@ foreach ($config['allowedIPs'] as $ip) {
 }
 if (!$accessGranted) {
 	http_response_code(401);
-	die('<h1>401 Unauthorized</h1> No access permitted from IP ' . $userIP);
+	die('<h1>401 Unauthorized</h1> No access permitted from IP ' . $userIP 
+		. ' (' . gethostbyaddr($userIP) . ')');
 }
 
 
@@ -300,6 +301,13 @@ function gitRemoteOriginUrl() {
 		/* Neater alignment for left column of tables - doesn't work with 'table-striped' though */
 		table td:first-child {
 		    padding-left: 0;
+		}
+		.navbar {
+		    background-image: url(img/Claw_Marks_SVG_White.svg);
+		    background-repeat: no-repeat;
+		    padding-left: 60px;
+		    background-size: auto 135%;
+		    background-position: 0px -10px;
 		}
 	</style>
 	<script src="js/vue.js"></script>
