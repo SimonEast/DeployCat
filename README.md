@@ -1,6 +1,8 @@
 # DeployCat
 Super-easy single-click website deployments. Requires PHP &amp; git.
 
+![DeployCat Screenshot](screenshot.png)
+
 Version 0.1.3. Public alpha. 
 
 ## Server Requirements
